@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Compilar y ejecutar pruebas
+        run: mvn -B verify
+
+      - name: Prueba de humo (arrancar la API y llamar los endpoints)
+        run: |
+          java -jar target/polizas-api-1.0.0.jar > app.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -s -o /dev/null -H "x-api-key: 123456" http://localhost:8080/polizas && break
+            sleep 2
+          done
+          set -x
+          # Sin API key debe responder 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/polizas)" = "401"
+          curl -sf -H "x-api-key: 123456" "http://localhost:8080/polizas?tipo=COLECTIVA"
+          curl -sf -H "x-api-key: 123456" http://localhost:8080/polizas/2/riesgos
+          curl -sf -X POST -H "x-api-key: 123456" http://localhost:8080/polizas/1/renovar
+          curl -sf -X POST -H "x-api-key: 123456" -H "Content-Type: application/json" \
+            -d '{"direccionInmueble":"Cl 50 # 10-20","arrendatario":"Juan Perez","arrendador":"Sofia Rios"}' \
+            http://localhost:8080/polizas/2/riesgos
+          # Agregar riesgo a una individual debe responder 422
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'x-api-key: 123456' -H 'Content-Type: application/json' \
+            -d '{"direccionInmueble":"X","arrendatario":"Y","arrendador":"Z"}' \
+            http://localhost:8080/polizas/1/riesgos)" = "422"
+          curl -sf -X POST -H "x-api-key: 123456" http://localhost:8080/polizas/2/cancelar
+          # Renovar una cancelada debe responder 422
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'x-api-key: 123456' http://localhost:8080/polizas/2/renovar)" = "422"
+          grep "CORE-MOCK" app.log
+
+      - name: Mostrar log de la aplicación
+        if: always()
+        run: cat app.log || true
