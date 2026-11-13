@@ -1,5 +1,7 @@
 # API de Gestión de Pólizas
 
+[![CI](https://github.com/emersaiprueba-afk/polizas-api/actions/workflows/ci.yml/badge.svg)](https://github.com/emersaiprueba-afk/polizas-api/actions/workflows/ci.yml)
+
 API REST en Spring Boot para gestionar pólizas de arrendamiento (individuales y colectivas) y sus riesgos, con integración simulada al CORE de seguros.
 
 ## Requisitos
