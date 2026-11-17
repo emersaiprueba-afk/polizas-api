@@ -34,6 +34,12 @@ jobs:
           curl -sf -H "x-api-key: 123456" "http://localhost:8080/polizas?tipo=COLECTIVA"
           curl -sf -H "x-api-key: 123456" http://localhost:8080/polizas/2/riesgos
           curl -sf -X POST -H "x-api-key: 123456" http://localhost:8080/polizas/1/renovar
+          # Renovar dos veces la misma poliza debe responder 422 (no aplica el IPC dos veces)
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'x-api-key: 123456' http://localhost:8080/polizas/1/renovar)" = "422"
+          # Filtro con valor invalido debe responder 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'x-api-key: 123456' 'http://localhost:8080/polizas?tipo=XYZ')" = "400"
+          # Cancelar el unico riesgo de una individual debe responder 422
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'x-api-key: 123456' http://localhost:8080/riesgos/1/cancelar)" = "422"
           curl -sf -X POST -H "x-api-key: 123456" -H "Content-Type: application/json" \
             -d '{"direccionInmueble":"Cl 50 # 10-20","arrendatario":"Juan Perez","arrendador":"Sofia Rios"}' \
             http://localhost:8080/polizas/2/riesgos
