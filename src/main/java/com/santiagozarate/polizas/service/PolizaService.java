@@ -8,37 +8,42 @@ import com.santiagozarate.polizas.entity.Poliza;
 import com.santiagozarate.polizas.entity.Riesgo;
 import com.santiagozarate.polizas.entity.TipoPoliza;
 import com.santiagozarate.polizas.exception.RecursoNoEncontradoException;
-import com.santiagozarate.polizas.exception.ReglaNegocioException;
-import com.santiagozarate.polizas.integration.CoreGateway;
+import com.santiagozarate.polizas.integration.PolizaActualizadaEvent;
 import com.santiagozarate.polizas.repository.PolizaRepository;
 import com.santiagozarate.polizas.repository.RiesgoRepository;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
- * Casos de uso de pólizas. Orquesta: busca los datos, aplica las reglas
- * (que viven en las entidades), guarda y avisa al CORE.
+ * Casos de uso de pólizas. Orquesta: busca los datos, delega las reglas en la
+ * entidad Poliza, guarda y publica un evento para avisar al CORE después del commit.
  */
 @Service
 public class PolizaService {
 
     private final PolizaRepository polizaRepository;
     private final RiesgoRepository riesgoRepository;
-    private final CoreGateway coreGateway;
+    private final ApplicationEventPublisher eventos;
+    private final Clock reloj;
     private final BigDecimal ipc;
 
     // Inyección por constructor: Spring entrega las dependencias al crear el servicio.
     public PolizaService(PolizaRepository polizaRepository,
                          RiesgoRepository riesgoRepository,
-                         CoreGateway coreGateway,
+                         ApplicationEventPublisher eventos,
+                         Clock reloj,
                          @Value("${negocio.ipc}") BigDecimal ipc) {
         this.polizaRepository = polizaRepository;
         this.riesgoRepository = riesgoRepository;
-        this.coreGateway = coreGateway;
+        this.eventos = eventos;
+        this.reloj = reloj;
         this.ipc = ipc;
     }
 
@@ -60,8 +65,8 @@ public class PolizaService {
     @Transactional
     public PolizaResponse renovar(Long polizaId) {
         Poliza poliza = buscarPoliza(polizaId);
-        poliza.renovar(ipc);
-        coreGateway.notificarActualizacion(polizaId);
+        poliza.renovar(ipc, LocalDate.now(reloj));
+        avisarCore(polizaId);
         return PolizaResponse.desde(poliza);
     }
 
@@ -69,21 +74,18 @@ public class PolizaService {
     public PolizaResponse cancelar(Long polizaId) {
         Poliza poliza = buscarPoliza(polizaId);
         poliza.cancelar();
-        coreGateway.notificarActualizacion(polizaId);
+        avisarCore(polizaId);
         return PolizaResponse.desde(poliza);
     }
 
     @Transactional
     public RiesgoResponse agregarRiesgo(Long polizaId, RiesgoRequest request) {
         Poliza poliza = buscarPoliza(polizaId);
-        if (poliza.getTipo() != TipoPoliza.COLECTIVA) {
-            throw new ReglaNegocioException("Solo se pueden agregar riesgos a pólizas colectivas");
-        }
         Riesgo riesgo = new Riesgo(request.direccionInmueble(),
                 request.arrendatario(), request.arrendador());
-        poliza.agregarRiesgo(riesgo);
+        poliza.agregarRiesgo(riesgo); // valida: póliza colectiva y no cancelada
         Riesgo guardado = riesgoRepository.save(riesgo);
-        coreGateway.notificarActualizacion(polizaId);
+        avisarCore(polizaId);
         return RiesgoResponse.desde(guardado);
     }
 
@@ -91,12 +93,15 @@ public class PolizaService {
     public RiesgoResponse cancelarRiesgo(Long riesgoId) {
         Riesgo riesgo = riesgoRepository.findById(riesgoId)
                 .orElseThrow(() -> new RecursoNoEncontradoException("Riesgo " + riesgoId + " no existe"));
-        if (riesgo.estaCancelado()) {
-            throw new ReglaNegocioException("El riesgo ya está cancelado");
-        }
-        riesgo.cancelar();
-        coreGateway.notificarActualizacion(riesgo.getPoliza().getId());
+        Poliza poliza = riesgo.getPoliza();
+        poliza.cancelarRiesgo(riesgo); // la regla vive en la póliza, raíz del agregado
+        avisarCore(poliza.getId());
         return RiesgoResponse.desde(riesgo);
+    }
+
+    /** El evento se entrega al CORE solo si la transacción se confirma (ver NotificadorCore). */
+    private void avisarCore(Long polizaId) {
+        eventos.publishEvent(new PolizaActualizadaEvent(polizaId));
     }
 
     private Poliza buscarPoliza(Long id) {

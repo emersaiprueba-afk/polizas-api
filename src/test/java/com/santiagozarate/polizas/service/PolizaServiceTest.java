@@ -2,17 +2,20 @@ package com.santiagozarate.polizas.service;
 
 import com.santiagozarate.polizas.dto.RiesgoRequest;
 import com.santiagozarate.polizas.entity.Poliza;
-import com.santiagozarate.polizas.entity.TipoPoliza;
+import com.santiagozarate.polizas.entity.Riesgo;
 import com.santiagozarate.polizas.exception.RecursoNoEncontradoException;
 import com.santiagozarate.polizas.exception.ReglaNegocioException;
-import com.santiagozarate.polizas.integration.CoreGateway;
+import com.santiagozarate.polizas.integration.PolizaActualizadaEvent;
 import com.santiagozarate.polizas.repository.PolizaRepository;
 import com.santiagozarate.polizas.repository.RiesgoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -24,34 +27,37 @@ import static org.mockito.Mockito.when;
 
 /**
  * Pruebas del servicio con "dobles" (mocks): reemplazamos la base de datos
- * y el CORE por objetos falsos para probar solo la lógica del servicio.
+ * y el publicador de eventos por objetos falsos para probar solo la lógica del servicio.
  */
 class PolizaServiceTest {
 
     private PolizaRepository polizaRepository;
     private RiesgoRepository riesgoRepository;
-    private CoreGateway coreGateway;
+    private ApplicationEventPublisher eventos;
     private PolizaService service;
 
     @BeforeEach
     void preparar() {
         polizaRepository = mock(PolizaRepository.class);
         riesgoRepository = mock(RiesgoRepository.class);
-        coreGateway = mock(CoreGateway.class);
-        service = new PolizaService(polizaRepository, riesgoRepository, coreGateway, new BigDecimal("0.05"));
+        eventos = mock(ApplicationEventPublisher.class);
+        Clock reloj = Clock.fixed(LocalDate.of(2026, 11, 17).atStartOfDay(ZoneId.systemDefault()).toInstant(),
+                ZoneId.systemDefault());
+        service = new PolizaService(polizaRepository, riesgoRepository, eventos, reloj, new BigDecimal("0.05"));
     }
 
-    private Poliza poliza(TipoPoliza tipo) {
-        return new Poliza(tipo, "Tomador", LocalDate.of(2026, 1, 1), 12, new BigDecimal("1000000"));
+    private Poliza individual() {
+        return Poliza.individual("Tomador", LocalDate.of(2026, 1, 1), 12, new BigDecimal("1000000"),
+                new Riesgo("Cra 1 # 2-3", "Arrendatario", "Arrendador"));
     }
 
     @Test
-    void renovarNotificaAlCore() {
-        when(polizaRepository.findById(1L)).thenReturn(Optional.of(poliza(TipoPoliza.INDIVIDUAL)));
+    void renovarPublicaElEventoParaElCore() {
+        when(polizaRepository.findById(1L)).thenReturn(Optional.of(individual()));
 
         service.renovar(1L);
 
-        verify(coreGateway).notificarActualizacion(1L);
+        verify(eventos).publishEvent(new PolizaActualizadaEvent(1L));
     }
 
     @Test
@@ -61,22 +67,22 @@ class PolizaServiceTest {
     }
 
     @Test
-    void noSeAgreganRiesgosAPolizaIndividualPorEsteEndpoint() {
-        when(polizaRepository.findById(1L)).thenReturn(Optional.of(poliza(TipoPoliza.INDIVIDUAL)));
+    void noSeAgreganRiesgosAPolizaIndividual() {
+        when(polizaRepository.findById(1L)).thenReturn(Optional.of(individual()));
         RiesgoRequest request = new RiesgoRequest("Cra 1 # 2-3", "Arrendatario", "Arrendador");
 
         assertThrows(ReglaNegocioException.class, () -> service.agregarRiesgo(1L, request));
         verify(riesgoRepository, never()).save(any());
-        verify(coreGateway, never()).notificarActualizacion(any());
+        verify(eventos, never()).publishEvent(any());
     }
 
     @Test
-    void siFallaLaReglaNoSeNotificaAlCore() {
-        Poliza cancelada = poliza(TipoPoliza.COLECTIVA);
+    void siFallaLaReglaNoSeAvisaAlCore() {
+        Poliza cancelada = individual();
         cancelada.cancelar();
         when(polizaRepository.findById(1L)).thenReturn(Optional.of(cancelada));
 
         assertThrows(ReglaNegocioException.class, () -> service.renovar(1L));
-        verify(coreGateway, never()).notificarActualizacion(any());
+        verify(eventos, never()).publishEvent(any());
     }
 }
