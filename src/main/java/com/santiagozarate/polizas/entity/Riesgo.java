@@ -55,7 +55,8 @@ public class Riesgo {
         this.poliza = poliza;
     }
 
-    public void cancelar() {
+    /** Solo la póliza puede cancelar un riesgo (método de paquete). */
+    void cancelar() {
         this.estado = EstadoRiesgo.CANCELADO;
     }
 

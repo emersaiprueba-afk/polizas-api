@@ -13,30 +13,37 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Pruebas de las reglas de negocio puras: no necesitan Spring ni base de datos. */
 class PolizaTest {
 
-    private Poliza nuevaPoliza(TipoPoliza tipo) {
-        return new Poliza(tipo, "Tomador", LocalDate.of(2026, 1, 1), 12, new BigDecimal("1000000"));
-    }
+    private static final LocalDate INICIO = LocalDate.of(2026, 1, 1);
+    private static final LocalDate HOY = LocalDate.of(2026, 11, 17);
+    private static final BigDecimal IPC = new BigDecimal("0.05");
 
     private Riesgo nuevoRiesgo() {
         return new Riesgo("Cra 1 # 2-3", "Arrendatario", "Arrendador");
     }
 
-    @Test
-    void primaEsCanonPorMesesDeVigencia() {
-        Poliza poliza = nuevaPoliza(TipoPoliza.INDIVIDUAL);
-        assertEquals(new BigDecimal("12000000.00"), poliza.getPrima());
+    private Poliza individual() {
+        return Poliza.individual("Tomador", INICIO, 12, new BigDecimal("1000000"), nuevoRiesgo());
+    }
+
+    private Poliza colectiva() {
+        return Poliza.colectiva("Inmobiliaria", INICIO, 12, new BigDecimal("1000000"));
     }
 
     @Test
-    void individualSoloAdmiteUnRiesgo() {
-        Poliza poliza = nuevaPoliza(TipoPoliza.INDIVIDUAL);
-        poliza.agregarRiesgo(nuevoRiesgo());
+    void primaEsCanonPorMesesDeVigencia() {
+        assertEquals(new BigDecimal("12000000.00"), individual().getPrima());
+    }
+
+    @Test
+    void individualNaceConUnRiesgoYNoAdmiteMas() {
+        Poliza poliza = individual();
+        assertEquals(1, poliza.riesgosActivos());
         assertThrows(ReglaNegocioException.class, () -> poliza.agregarRiesgo(nuevoRiesgo()));
     }
 
     @Test
     void colectivaAdmiteVariosRiesgos() {
-        Poliza poliza = nuevaPoliza(TipoPoliza.COLECTIVA);
+        Poliza poliza = colectiva();
         poliza.agregarRiesgo(nuevoRiesgo());
         poliza.agregarRiesgo(nuevoRiesgo());
         assertEquals(2, poliza.riesgosActivos());
@@ -44,8 +51,8 @@ class PolizaTest {
 
     @Test
     void renovarAjustaCanonYPrimaPorIpcYCambiaEstado() {
-        Poliza poliza = nuevaPoliza(TipoPoliza.INDIVIDUAL);
-        poliza.renovar(new BigDecimal("0.05"));
+        Poliza poliza = individual();
+        poliza.renovar(IPC, HOY);
 
         assertEquals(new BigDecimal("1050000.00"), poliza.getCanonMensual());
         assertEquals(new BigDecimal("12600000.00"), poliza.getPrima());
@@ -55,15 +62,24 @@ class PolizaTest {
     }
 
     @Test
+    void renovarDosVecesSeguidasNoAplicaElIpcDosVeces() {
+        Poliza poliza = individual();
+        poliza.renovar(IPC, HOY);
+
+        assertThrows(ReglaNegocioException.class, () -> poliza.renovar(IPC, HOY));
+        assertEquals(new BigDecimal("1050000.00"), poliza.getCanonMensual());
+    }
+
+    @Test
     void noSePuedeRenovarUnaPolizaCancelada() {
-        Poliza poliza = nuevaPoliza(TipoPoliza.INDIVIDUAL);
+        Poliza poliza = individual();
         poliza.cancelar();
-        assertThrows(ReglaNegocioException.class, () -> poliza.renovar(new BigDecimal("0.05")));
+        assertThrows(ReglaNegocioException.class, () -> poliza.renovar(IPC, HOY));
     }
 
     @Test
     void cancelarPolizaCancelaTodosSusRiesgos() {
-        Poliza poliza = nuevaPoliza(TipoPoliza.COLECTIVA);
+        Poliza poliza = colectiva();
         poliza.agregarRiesgo(nuevoRiesgo());
         poliza.agregarRiesgo(nuevoRiesgo());
 
@@ -71,5 +87,19 @@ class PolizaTest {
 
         assertEquals(EstadoPoliza.CANCELADA, poliza.getEstado());
         assertTrue(poliza.getRiesgos().stream().allMatch(Riesgo::estaCancelado));
+    }
+
+    @Test
+    void noSePuedeCancelarElUnicoRiesgoDeUnaIndividual() {
+        Poliza poliza = individual();
+        Riesgo unico = poliza.getRiesgos().get(0);
+        assertThrows(ReglaNegocioException.class, () -> poliza.cancelarRiesgo(unico));
+        assertEquals(1, poliza.riesgosActivos());
+    }
+
+    @Test
+    void laListaDeRiesgosEsDeSoloLectura() {
+        Poliza poliza = colectiva();
+        assertThrows(UnsupportedOperationException.class, () -> poliza.getRiesgos().add(nuevoRiesgo()));
     }
 }
