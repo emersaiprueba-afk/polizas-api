@@ -20,6 +20,7 @@ La API queda en `http://localhost:8080`. Al arrancar se cargan 2 pólizas de eje
 ```bash
 mvn test
 ```
+Incluye pruebas unitarias de las reglas (sin Spring), pruebas del servicio con mocks y pruebas de integración de los endpoints con MockMvc. Además, el pipeline de GitHub Actions arranca la API y la prueba con llamadas reales.
 
 ## Seguridad
 Todas las peticiones exigen el header `x-api-key: 123456`. Sin él, la respuesta es `401`.
@@ -48,22 +49,27 @@ curl -X POST -H "x-api-key: 123456" -H "Content-Type: application/json" \
 ```
 
 ## Reglas de negocio implementadas
-- Una póliza individual solo puede tener 1 riesgo activo.
-- Solo se agregan riesgos por API a pólizas colectivas.
+Todas viven en la entidad `Poliza` (raíz del agregado); el servicio solo orquesta.
+- Una póliza individual nace con su único riesgo y no admite más. Solo las colectivas admiten riesgos nuevos.
 - No se puede renovar una póliza cancelada.
+- La renovación es idempotente: si la nueva vigencia aún no ha empezado, un segundo intento (doble clic) responde 422 y no aplica el IPC dos veces.
 - Cancelar una póliza cancela todos sus riesgos.
+- No se puede cancelar el único riesgo de una póliza individual (quedaría activa sin nada asegurado): se cancela la póliza.
 - Prima = canon mensual × meses de vigencia. La renovación ajusta el canon por IPC (configurable con la variable `IPC`) y recalcula la prima por el mismo periodo.
 
 ## Respuestas de error
-Formato estándar Problem Details (RFC 9457):
-- `400` datos inválidos
+Todas en formato estándar Problem Details (RFC 9457):
+- `400` datos inválidos, JSON mal formado o parámetro con valor no permitido
 - `401` falta o es inválida la API key
 - `404` póliza o riesgo inexistente
+- `409` la póliza fue modificada al mismo tiempo por otro usuario (concurrencia optimista)
 - `422` regla de negocio violada
+- `500` error inesperado (sin exponer detalles internos)
 
 ## Decisiones de diseño
 - **Capas**: `controller` (HTTP) → `service` (casos de uso) → `repository` (datos). Las reglas de negocio viven en la entidad `Poliza` (raíz del agregado) para que no se puedan saltar.
-- **Puerto y adaptador para el CORE**: el servicio depende de la interfaz `CoreGateway`; `HttpCoreGateway` es el adaptador. Pasar del mock al servicio real en WebLogic solo requiere configuración (`CORE_URL`) o un nuevo adaptador.
+- **Puerto y adaptador para el CORE**: el servicio depende de la interfaz `CoreGateway`; `HttpCoreGateway` es el adaptador, con timeouts configurables. Pasar del mock al servicio real en WebLogic solo requiere configuración (`CORE_URL`) o un nuevo adaptador.
+- **Aviso al CORE después del commit**: el servicio publica un evento y `NotificadorCore` lo envía con `@TransactionalEventListener(AFTER_COMMIT)`. Si la transacción falla, el CORE nunca recibe un cambio que no ocurrió.
 - **DTOs** (`record`): la API no expone las entidades JPA.
 - **Concurrencia optimista** con `@Version` para evitar cambios perdidos.
 - **H2 en memoria** para la prueba; en producción iría Oracle con migraciones (Flyway).
